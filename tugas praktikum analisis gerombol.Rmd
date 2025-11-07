@@ -1,0 +1,323 @@
+---
+title: "Tugas Individu TPG Praktikum : Analisis Gerombol"
+author: "Muth'iah Iffa Karimah"
+date: "2025-11-06"
+output:
+  html_document:
+    theme: journal
+    toc: true
+    toc_float: true
+    number_sections: FALSE
+---
+
+# Input Data : Data World Happines Record 2021 (kaggle)
+
+```{r}
+library(readr)
+library(psych)
+library(GPArotation)
+library(factoextra)
+library(dplyr)  
+library(cluster)
+library(factoextra)
+library(clusterCrit)
+library(ggplot2)
+library(tidyr)
+library(scales)
+library(corrplot)
+library(cluster)
+```
+
+```{r}
+data = read_csv("D:\\Semester 5\\TPG\\Praktikum\\world happiness report\\world-happiness-report-2021.csv")
+str(data)
+View(data)
+```
+
+# Eksplorasi Data
+
+### Peubah Relevan
+
+Memilih peubah yang relevan dengan sosial-politik-dan ekoonomi karena peubah seperti log GDP per kapita menunjukkan skor bukan peubah untuk penggerombolan.
+
+```{r}
+# Memilih peubah yang relevan
+data_new <- data %>%
+  select(`Country name`, 
+         `Logged GDP per capita`, 
+         `Social support`, 
+         `Healthy life expectancy`, 
+         `Freedom to make life choices`, 
+         `Generosity`, 
+         `Perceptions of corruption`)
+
+# Lihat 6 baris pertama dari data baru kita
+head(data_new)
+View(data_new)
+```
+
+## Cek Missing Value
+
+```{r}
+# Menghitung jumlah data hilang di tiap kolom 
+colSums(is.na(data_new))
+```
+
+Data sudah bersih, terlihat tidak ada missing value di tiap kolom
+
+## Skala Peubah
+
+Menjawab pertanyaan "Apakah perlu standarisasi?"
+
+```{r}
+data.num = data_new %>% select(-`Country name`) # Pengecualian kolom negara untuk dianalisis
+summary(data.num) # Ringkasan statistik
+```
+
+Nilai peubah "Healthy life expectancy" dan "Logged GDP per capita" cukup berbeda dengan nilai 3 peubah lainnya yang berada di bawah 1. Artinya perlu lakukan standarisasi
+
+## Outlier
+
+```{r}
+# Matriks korelasi 
+corr = cor(data.num)
+
+# Visualisasi
+corrplot(corr, method = "number", tl.col = "black", tl.srt = 45)
+```
+
+Dalam data terlihat bahwa korelasi tertinggi antarpeubah adalah
+
+1.  **Helathy life expectancy - Logged GDP per capita = 0.86**
+2.  **Social support - Logged GDP per capita = 0.79**
+3.  **Healthy life expecancy - Social support = 0.72**
+
+Artinya hasil matriks korelasi ini menunjukkan bahwa ada multikolinearitas pada data, perlu "membuang" salah satu peubah yang menyebabkan redudansi.
+
+Di sini saya akan **membuang peubah "Healthy life expectancy"** karena peubah tersebut adalah hasil dari peubah "Logged GDP per capita" dan "Social support" yang mana kedua peubah ini adalah pendorong utama dari ekonomi dan sosial.
+
+## Boxplot
+
+```{r}
+# Logged GDP per capita
+ggplot(data.num, aes(x = "", y = `Logged GDP per capita`)) +
+  geom_boxplot() +
+  labs(title = "Boxplot untuk Logged GDP per capita", x = "")
+
+# Social support 
+ggplot(data.num, aes(x = "", y = `Social support`)) +
+  geom_boxplot() +
+  labs(title = "Boxplot untuk Social support", x = "")
+
+# Freedom to make life choices
+ggplot(data.num, aes(x = "", y = `Freedom to make life choices`)) +
+  geom_boxplot() +
+  labs(title = "Boxplot untuk Freedom to make life choices", x = "")
+
+# Generosity
+ggplot(data.num, aes(x = "", y = `Generosity`)) +
+  geom_boxplot() +
+  labs(title = "Boxplot untuk Generosity", x = "")
+
+# Perceptions of corruption
+ggplot(data.num, aes(x = "", y = `Perceptions of corruption`)) +
+  geom_boxplot() +
+  labs(title = "Boxplot untuk Perceptions of corruption", x = "")
+```
+
+-   Logged GDP per capita –\> tidak ada outlier
+
+-   Social support –\> ada 2 outlier di bawah (agak berdekatan)
+
+-   Freedom to make life choices –\> ada 1 oulier di bawah (cukup jauh)
+
+-   Generosity –\> ada 3 outlier di atas (2 outlier terjauh cukup berdektan)
+
+-   Perceptioin of corruption –\> cukup banyak outlier di bawah (ada 1 outlier cukup jauh)
+
+# Persiapan Data Final
+
+```{r}
+# Buang peubah healthy life expectancy
+data.final = data.num %>% select(-`Healthy life expectancy`)
+head(data.final)
+str(data.final)
+```
+
+## Standarisasi Data
+
+```{r}
+data.final.new = scale(data.final)
+summary(data.final.new)
+```
+
+Semua nilai peubah data sudah dalam satu skala yang sama.
+
+```{r}
+# Simpan nama negara untuk label di akhir 
+negara = data_new$`Country name`
+head(negara)
+```
+
+## Menentukan K Optimal
+
+Menggunakan fviz_nbclust untuk mencari jumlah gerombol (K) optimal dengan menggunakan FUNcluster = pam (K-Medoids) dan method = "silhouette" yang robust.
+
+```{r}
+# Penentuan K Optimal 
+set.seed(123)
+plot_k_optimal = fviz_nbclust(data.final.new,
+                              FUNcluster = pam, # Fungsi: K-Medoids
+                              method = "silhouette") # Metode Evaluasi
+plot_k_optimal
+```
+
+Terlihat dari plot bahwa K optimalnya adalah 3, maka akan ada 3 gerombol karena ketika menambahkan nilai K Average silhouette width nya mulai menurun sehingga kurang baik.
+
+# Metode Hierarki
+
+```{r}
+# Hitung matriks jarak 
+euclidean = dist(data.final.new, method = "euclidean")
+
+# Jalankan metofe hierarki (Metode Ward)
+set.seed(123)
+hierarki = hclust(euclidean, method = "ward.D2")
+
+# Visualisasi (Dendogram) 
+plot(hierarki, 
+     main = "Dendogram Negara (Metode Ward, K = 3",
+     xlab = "Negara",
+     sub = "Metode Jarak Euclidean",
+     labels = FALSE,
+     cex = 0.6)
+rect.hclust(hierarki, k = 3, border = "red") # Menambahkan kotak merah untuk gerombol
+```
+
+```{r}
+# Label Keanggotaan Gerombol
+label_hierarki = cutree(hierarki, k=3)
+print(table(label_hierarki))
+
+# Daftar negara tiap gerombol 
+gerombol = data.frame(
+  Negara = negara,
+  Gerombol = label_hierarki
+)
+head(gerombol)
+```
+
+```{r}
+# Dapatkan vektor nama negara untuk setiap gerombol
+negarag1 <- gerombol %>% 
+  filter(Gerombol == 1) %>% 
+  pull(Negara) # 16 negara
+
+negarag2 <- gerombol %>% 
+  filter(Gerombol == 2) %>% 
+  pull(Negara) # 75 negara
+
+negarag3 <- gerombol %>% 
+  filter(Gerombol == 3) %>% 
+  pull(Negara) # 58 negara
+
+# Cari panjang maksimum (yaitu 75)
+max_len <- max(length(negarag1), length(negarag2), length(negarag3))
+
+# "Pad" (isi) vektor yang lebih pendek dengan NA agar panjangnya sama
+length(negarag1) <- max_len
+length(negarag2) <- max_len
+length(negarag3) <- max_len
+
+# Buat data frame (tabel) akhir
+# check.names = FALSE agar nama kolom tidak diubah jadi "Gerombol.1"
+tabel_hasil_hierarki <- data.frame(
+  "Gerombol 1" = negarag1,
+  "Gerombol 2" = negarag2,
+  "Gerombol 3" = negarag3,
+  check.names = FALSE
+)
+
+# Tabel daftar negara per gerombol
+print("--- Tabel Anggota Gerombol (Metode Hierarki) ---")
+print(tabel_hasil_hierarki)
+```
+
+# Metode Non Hierarki
+
+```{r}
+# K-Medoids (pam)
+set.seed(123) 
+model_kmedoids <- pam(data.final.new,    
+                        k = 3,           
+                        metric = "euclidean") # Gunakan data standar 'data.final.new' dan K=3
+
+# Label model K-Medoids
+label_kmedoids <- model_kmedoids$cluster
+
+# Visualisasi
+plot_kmedoids <- fviz_cluster(model_kmedoids, 
+                              data = data.final.new, 
+                              geom = "point",
+                              ellipse.type = "convex") +
+  ggtitle("Hasil K-Medoids (K=3)") +
+  theme_minimal()
+
+print(plot_kmedoids)
+```
+
+```{r}
+# Membandingkan metode
+tabel_silang <- table(Hierarki_Ward = label_hierarki, 
+                      KMedoids_pam = label_kmedoids)
+
+print("TABEL SILANG PERBANDINGAN METODE")
+print(tabel_silang)
+```
+
+Pada perbandingan terlihat bahwa ada persamaan jumlah negara pada gerombol 1 dan ada perbedaan pada jumlah gerombol 2 dan 3
+
+-   Gerombol 1 pada metode ward dan K-Medoids sama sama memiliki 16 negara
+
+-   Gerombol 2 pada metode ward memiliki 75 negara namun pada K-Medoids memiliki 53 negara
+
+-   Gerombol 3 pada metode ward memiliki 58 negara, namun K-Medoids memiliki 42 negara
+
+Perbedaan ini mungkin terjadi disebabkan karena outlier yang terdapat dalam data. Metode Ward yang tidak robust terhadap outlier dan berbasis ragam yang mungkin agak terganggu dengan outlier.
+
+Sementara metode K-Medoids yang memang robust terhadap outlier dan mengabaikan outlier tersebut sehingga memiliki batas yang berbeda si daerah yang "abu-abu"
+
+# Profiling
+
+Menentukan apa makna dari 3 gerombol yang dihasilkan. Di sini dipilih metode K-Medoids yang memang robust terhadap outlier secara teoritis.
+
+```{r}
+profiling = data.final %>% mutate (Gerombol = label_kmedoids)
+
+# Hitung rataan tiap peubah di tiap gerombol 
+tabel_profil = profiling %>% 
+  group_by(Gerombol) %>% 
+  summarise_all(mean)
+
+# Tabel Hasil profiling
+print(tabel_profil)
+View(tabel_profil)
+```
+
+Dari hasil profiling Gerombol 1 merupakan gerombol dengan tingkat kebahagiaan yang paling tinggi karena Logged GDP per capita, Social support, Freedom to make life choices, dan Generosity nya memiliki nilai yang paling tinggi serta dengan nilai Perception of corruptionnya yang paling rendah.
+
+Pada hasil profiling Gerombol 2 dan 3 ada beberapa perbedaan.
+
+-   Gerombol 2 unggul dalam 3 pilar utama yaitu : Logged GDP per capita, Social support, dan Freedom to make life choices
+
+-   Tetapi gerombol 2 nilai Generosity-nya jauh lebih kecil (-0.08) dari Gerombol 3 (0.05)
+
+Dari hasil pertimbangan perbedaan di antara Gerombol 2 dan 3, diputuskan bahwa Gerombol 2 memiliki tingkat kebahagiaan yang lebih tinggi dari Gerombol 3 karena unggul dalam 3 pilar utama.
+
+Sehingga hasil akhir profilingnya adalah sebagai berikut:
+
+-   **Gerombol 1 (16 Negara): "Negara Sejahtera, Transparan, & Dermawan"** (Skor tertinggi di semua metrik positif, skor terendah di metrik negatif (korupsi)).
+
+-   **Gerombol 2 (75 Negara): "Negara Berkembang-Mapan dengan Masalah Korupsi"** (GDP, Dukungan Sosial, dan Kebebasan di tingkat "Menengah-Atas". Namun, tingkat korupsinya tinggi dan kedermawanannya rendah).
+
+-   **Gerombol 3 (58 Negara): "Negara Berkembang-Rendah / Miskin"** (Skor terendah di 3 pilar utama: GDP, Dukungan Sosial, dan Kebebasan. Meskipun mereka sedikit lebih dermawan dan korupsinya sedikit lebih baik dari G2, mereka tertinggal jauh di fondasi ekonomi & sosial).
