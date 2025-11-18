@@ -1,0 +1,174 @@
+---
+title: 'Tugas Praktikum 11: Analisis Diskriminan'
+author: "Muthi'ah Iffa Karimah"
+date: "2025-11-17"
+output:
+  html_document:
+    theme: journal
+    toc: true
+    toc_float: true
+    number_sections: FALSE
+---
+
+# Analisis Diskriminan
+
+Di sini menggunakan data World Happiness Report 2021 dari hasil analisis gerombol pada tugas sebelumnya
+
+Ini adalah hasil analisis data. Anda bisa melihat sumber datanya [di sini](https://rpubs.com/Iffa_345/analisis-gerombol-tpg).
+
+Kemudian berikut adalah file excel nya [di sini](Praktikum/Tugas/Data%20Analisis%20Diskriminan%20(raw).csv)
+
+```{r}
+library(readr)
+library(psych)
+library(GPArotation)
+library(factoextra)
+library(dplyr)  
+library(cluster)
+library(factoextra)
+library(clusterCrit)
+library(ggplot2)
+library(tidyr)
+library(scales)
+library(corrplot)
+library(cluster)
+library(MASS)
+```
+
+# Persiapan Data
+
+Ambil data dari hasil analisis gerombol sebelumnya
+
+# Import Data 
+
+```{r}
+d = read_csv("D:\\Semester 5\\TPG\\TPG\\Data_Tugas_Diskriminan_FINAL.csv")
+head(d)
+```
+
+```{r}
+# pisahkan data per kelompok
+M = subset(d, Kelas == "Middle") [,1:4]
+L = subset(d, Kelas == "Low") [,1:4]
+
+M
+L
+```
+
+# Mean per Kelompok 
+
+```{r}
+# Menghitung mean kelompok Middle dan Low
+mean_M <- colMeans(M[, 3:4], na.rm = TRUE)
+mean_L <- colMeans(L[, 3:4], na.rm = TRUE)
+
+mean <- d %>%
+  group_by(Kelas) %>%
+  summarise(
+    Mean_GDP = mean(`Logged GDP per capita`, na.rm = TRUE),
+    Mean_Social = mean(`Social support`, na.rm = TRUE)
+  )
+mean
+```
+
+# Covariance 
+
+## Tiap Kelompok 
+
+```{r}
+# Matriks Covariance Middle 
+cov_M = cov(M[, 3:4])
+cov_M
+```
+
+```{r}
+# Matriks Covariance Low
+cov_L = cov(L[, 3:4])
+cov_L
+```
+
+## Covariance Gabungan 
+
+```{r}
+# Hitung jumlah sampel (n) tiap kelompok 
+n_M = nrow(M)
+n_L = nrow(L)
+
+# Hitung Matriks Covariance gabungan dari kelompok Middle dan Low
+pembilang = ((n_M-1)*cov_M) + ((n_L-1)*cov_L)
+penyebut = n_M + n_L -2 
+
+# Hasil akhir
+S_gab = pembilang/penyebut
+S_gab
+```
+
+## Inverse S_gab
+
+```{r}
+S_gab_inv = solve(S_gab)
+S_gab_inv
+```
+
+# Koefisien Model (a/Fisher LDA) 
+
+```{r}
+a = S_gab_inv %*% (mean_M - mean_L)
+a
+```
+
+# Nilai Batas Klasifikasi (h)
+
+```{r}
+h = 0.5 * t(a) %*% (mean_M + mean_L)
+h
+```
+
+# Skor Fisher
+
+```{r}
+# Ubah data kolom 3 dan 4 jadi matriks 
+X = as.matrix(d[3:4])
+
+# Hitung Fisher skor 
+fisher = X %*% a # kalikan matriks X dengan nilai a
+
+# Gabungkan hasil
+d_hasil = d
+d_hasil$fisher = as.vector(fisher)
+```
+
+## Nilai Prediksi 
+
+Jika Skor \> h --\> Masuk ke Kelompok Middle
+Jika Skor \< h --\> Masuk ke Kelompok Low
+
+```{r}
+# klasifikasi Prediksi
+d_hasil$Prediksi = ifelse(d_hasil$fisher > as.numeric(h), "Middle", "Low")
+head(d_hasil)
+```
+
+# Confusion Matrix
+
+```{r}
+# Buat tabel silang/tabel akurasi (Confusion Matrix) 
+conf_matrix = table(Kelas_Asli = d_hasil$Kelas, Prediksi_Model = d_hasil$Prediksi)
+conf_matrix
+```
+
+# Error Rate (APER)
+
+```{r}
+# Error Rate kelompok Low (Aktual "Low" (Baris Low), tapi masuk ke kolom "Middle")
+err_low = conf_matrix["Low", "Middle"] / sum(d_hasil$Kelas == "Low")
+
+err_low
+```
+
+```{r}
+# Error Rate kelompok Low (Aktual "Middle" (Baris Middle), tapi masuk ke kolom "Low")
+err_middle = conf_matrix["Middle", "Low"] / sum(d_hasil$Kelas == "Middle")
+
+err_middle
+```
