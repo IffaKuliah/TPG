@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 ---
 title: 'Tugas Praktikum 11: Analisis Diskriminan'
 author: "Muthi'ah Iffa Karimah"
