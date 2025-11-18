@@ -348,4 +348,4 @@ err_middle = conf_matrix["Middle", "Low"] / sum(d_hasil$Kelas == "Middle")
 
 err_middle
 ```
->>>>>>> 3b6283544fc33635e05bd4dddc58df3140927720
+
