@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 ---
 title: 'Tugas Praktikum 11: Analisis Diskriminan'
 author: "Muthi'ah Iffa Karimah"
@@ -348,4 +348,4 @@ err_middle = conf_matrix["Middle", "Low"] / sum(d_hasil$Kelas == "Middle")
 
 err_middle
 ```
->>>>>>> 3b6283544fc33635e05bd4dddc58df3140927720
+
