@@ -1,0 +1,966 @@
+---
+title: "Tugas Akhir Mandiri TPG"
+author: "Muthi'ah Iffa Karimah"
+date: "2025-11-25"
+output:
+  html_document:
+    theme: journal
+    toc: true
+    toc_float: true
+    number_sections: FALSE
+---
+
+# Penerapan Analisis Gerombol Berhierarki (Metode Ward) untuk Pemetaan Stabilitas Harga Komoditas Pangan Pasca-Kebijakan Impor (Studi Kasus: Daging Sapi 2023 dan Beras 2024)
+
+## *Cleaning Data*
+
+```{r}
+library(readr)
+library(readxl)
+library(psych)
+library(GPArotation)
+library(factoextra)
+library(cluster)
+library(factoextra)
+library(clusterCrit)
+library(ggplot2)
+library(tidyr)
+library(scales)
+library(corrplot)
+library(cluster)
+library(MASS)
+library(dplyr)
+library(writexl)
+```
+
+```{r}
+# data.raw = read_csv("D:\\Semester 5\\TPG\\TPG\\Tugas Akhir Mandiri TPG .csv")
+# head(data.raw)
+```
+
+```{r}
+# Rapikan data 
+# data = data.raw %>% separate( col = 1,  into = c("Kabupaten", "Tahun", "Bulan", "Komoditas", "Harga", "Kategori", "Nilai_X", "Nilai_Y", "Provinsi"), sep = ";")
+# View(data)
+```
+
+```{r}
+# Simpan File 
+# write_xlsx(data, "Tugas Akhir Mandiri TPG (rapi).xlsx")
+```
+
+# Input File
+
+```{r}
+komoditas = read_xlsx("D:\\Semester 5\\TPG\\TPG\\Tugas Akhir Mandiri TPG (rapi).xlsx")
+head(komoditas)
+str(komoditas)
+```
+
+```{r}
+# Definisikan Bulan
+bulan = c("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
+
+# Ubah peubah menjadi numerik
+komoditas = komoditas %>% mutate(
+    Harga   = as.numeric(Harga),
+    KodeBPS = as.numeric(KodeBPS),
+    KodeProv = as.numeric(KodeProv), 
+    Tahun = as.integer(Tahun), # Ubah tahun integer
+    Bulan = factor(Bulan, levels = bulan, ordered = TRUE)
+    )
+
+str(komoditas)
+nrow(komoditas)
+```
+
+# Persiapan Data (*Preprocessing Data*)
+
+## Cek Missing Value
+
+```{r}
+sum.na = colSums(is.na(komoditas))
+sum.na
+```
+
+```{r}
+# cek baris mana saja yang missing value 
+komoditas$no.baris = 1:nrow(komoditas)
+
+# filter data, mengambil baris yang missing value 
+tabel.na = komoditas %>% filter(is.na(Harga))
+head(tabel.na)
+
+# Lihat provinsi apa saja yang memiliki missing value 
+provinsi.na = tabel.na %>% count(Provinsi, sort = TRUE)
+provinsi.na
+```
+
+### Penanganan Missing Value
+
+Terdapat 61513 *missing value* di dalam peubah Harga, sehingga dilakukan penanganan dengan mengisi *missing value* dengan nilai rataan wilayah tetangganya (terdekat).
+
+```{r}
+komoditas = komoditas %>% mutate(
+  Pulau = case_when(
+    # SUMATERA (Tetangga Sumut ada di sini)
+      Provinsi %in% c("Aceh", "Sumatera Utara", "Sumatera Barat", "Riau", "Kepulauan Riau", 
+                      "Jambi", "Sumatera Selatan", "Bengkulu", "Lampung", "Kepulauan Bangka Belitung") ~ "Sumatera",
+      
+      # JAWA
+      Provinsi %in% c("DKI Jakarta", "Jawa Barat", "Jawa Tengah", "DI Yogyakarta", "Jawa Timur", "Banten") ~ "Jawa",
+      
+      # BALI & NUSA TENGGARA
+      Provinsi %in% c("Bali", "Nusa Tenggara Barat", "Nusa Tenggara Timur") ~ "BaliNusra",
+      
+      # KALIMANTAN
+      Provinsi %in% c("Kalimantan Barat", "Kalimantan Tengah", "Kalimantan Selatan", "Kalimantan Timur", "Kalimantan Utara") ~ "Kalimantan",
+      
+      # SULAWESI
+      Provinsi %in% c("Sulawesi Utara", "Gorontalo", "Sulawesi Tengah", "Sulawesi Barat", "Sulawesi Selatan", "Sulawesi Tenggara") ~ "Sulawesi",
+      
+      # MALUKU & PAPUA
+      Provinsi %in% c("Maluku", "Maluku Utara", "Papua", "Papua Barat", "Papua Barat Daya", "Papua Selatan", "Papua Tengah", "Papua Pegunungan") ~ "MalukuPapua",
+                   
+            )
+)
+head(komoditas)
+```
+
+**no.baris** adalah nomor baris yang ada di tabel/data "komoditas", artinya jika di dalam kolom no.baris berisi "12" artinya ada missing value di baris ke 12 dalam tabel/data "komoditas"
+
+```{r}
+# Buat Referensi 
+# Hitung rataan harga per Kabupaten
+ref_kab = komoditas %>% 
+  group_by(Kabupaten, Komoditas) %>% # mengelompokkan data berdasat Kabupaten dan Komoditas
+  summarise(mean_kab = mean(Harga, na.rm = TRUE), .groups = "drop") # menghitung rataan harga dengan mengabaikan missing value (na.rm = TRUE)
+
+# Hitung rataan harga per Provinsi
+ref_prov = komoditas %>%
+  group_by(Provinsi, Komoditas) %>%
+  summarise(mean_prov = mean(Harga, na.rm = TRUE), .groups = "drop")
+  
+# Rata-rata harga per Pulau
+ref_pulau = komoditas %>%
+  group_by(Pulau, Komoditas) %>%
+  summarise(mean_pulau = mean(Harga, na.rm = TRUE), .groups = "drop")
+
+# Rata-rata Nasional (Jaring Pengaman Terakhir)
+ref_nas <- komoditas %>%
+  group_by(Komoditas) %>%
+  summarise(mean_nas = mean(Harga, na.rm = TRUE), .groups = "drop")
+```
+
+```{r}
+# Menyandingkan referensi ke tabel utama 
+komoditas_ref = komoditas %>% 
+  # Gabungkan semua tabel referensi ke data utama
+  left_join(ref_kab, by = c("Kabupaten", "Komoditas")) %>%
+  left_join(ref_prov, by = c("Provinsi", "Komoditas")) %>%
+  left_join(ref_pulau, by = c("Pulau", "Komoditas")) %>%
+  left_join(ref_nas, by = "Komoditas") %>%
+  # Lakukan pengisian dengan urutan prioritas
+  mutate(
+    Harga_Fix = coalesce(Harga,        # Cek Harga Asli
+                         mean_kab,     # jika kosong, pakai Rataan Kabupaten
+                        mean_prov,    # jika kosong, pakai Rataan Provinsi
+                         mean_pulau,   # jika kosong, pakai Rataan Pulau (Tetangga)
+                         mean_nas))     # terakhir pakai Rataan Nasional
+str(komoditas_ref)
+```
+
+Harga = data asli (raw) original dari file excel yang masih memiliki banyak *missing value*
+
+mean_kab/\_prov/*pulau = mean yang diambil dari tiap kabupaten, provinsi, dan pulau.* (Jika rataan kabupaten kosong, maka rataan prov kosong, maka rataan pulau juga kosong)
+
+mean_nas = rataan nasional
+
+Harga_FIx = hasil akhir, jika harga asli ada akan dipakai, jika tidak maka akan otomatis memakai harga dari nilai referensi tadi sesuai dengan urutan prioritas
+
+no.baris = nomor urut baris sesuai data asli di excel untuk melacak kembali data yang mengandung *missing value*
+
+### Finalisasi Data
+
+```{r}
+# Mengisi missing value pada kolom harga dengan nilai rataan dari referensi
+komoditas_final = komoditas_ref %>% 
+  mutate(Harga = Harga_Fix) %>%
+  select(-mean_kab, -mean_prov, -mean_pulau, -mean_nas, -Harga_Fix, -no.baris)
+
+str(komoditas_final)
+```
+
+```{r}
+# cek missing value pada data final 
+colSums(is.na(komoditas_final))
+```
+
+```{r}
+# Perbaikan kolom Provinsi
+komoditas_final = komoditas_final %>% mutate(
+  Provinsi = case_when(KodeProv == 65 ~ "Kalimantan Utara", # mengubah KodeProv 65 menjadi "Kalimantan Utara"
+                       TRUE ~ Provinsi), # sisanya biarkan
+  Pulau = case_when(
+    Provinsi == "Kalimantan Utara" ~ "Kalimantan", # jika provinsi sudah terisi, isi pulaunya menjadi "Kalimantan"
+    TRUE ~ Pulau # sisanya biarkan
+  )
+)
+
+# Cek hasil perbaikan
+kaltara = komoditas_final %>% 
+  filter(KodeProv == 65) %>%  # <--- Tanda pipe ini yang tadi kurang
+  select(Kabupaten, Provinsi, Pulau) %>% 
+  distinct() # Ambil data unik saja
+
+kaltara
+```
+
+```{r}
+colSums(is.na(komoditas_final))
+```
+
+data provinsi dan pulau sudah bersih
+
+```{r}
+# Export file ke excel
+# write_xlsx(komoditas_final, "Tugas Akhir Mandiri TPG (clean).xlsx")
+```
+
+# Analisis Klastering
+
+Pada analisis ini akan dilakukan analisis klastering secara terpisah pada komoditas beras dan daging sapi.
+
+1.  studi kasus 1: Daging Sapi (2023) –\> fokus melihat stabilitas harga daging saat impor daging tertinggi
+2.  studi kasus 2: Beras (2024) –\> fokus melihat stabilitas harga beras saat impor beras tertinggi
+
+#### Metode Hierarki (Ward)
+
+$$ JKS = \sum_j^n (x_j - \bar{x})'(x_j - \bar{x})  $$
+
+$$ atau  $$
+
+$$ ESS = \sum_i^n (x_i - \bar{x})^2  $$
+
+Menentukan klaster dengan metode hierarki dengan *Ward's Method* karena metode ini bertujuan untuk mendapatkan klaster dengan varians sekecil mungkin (Matdoan et al., 2023) dan meminimalkan hilangnya informasi akibat penggabungan objek menjadi klaster (Hernanto et al., 2017).
+
+1.  **Menghasilkan klaster yang homogen**: metode ini meminimumkan varians (ragam) dalam klaster sehingga klaster yang terbentuk nantinya akan benar-benar memiliki harga yang sangat mirip.
+2.  **Sensitif Terhadap Ukuran Kelompok**: cenderung menghasilkan klaster dengan ukuran yang relatif seimbang, misal: klaster 1 = 10, klaster 2 = 15, klaster 3 = 9.
+3.  **Dasar Matematis**: metode ward bekerja dengan meminimumkan varians. Pada analisis ini digunakan Standar Deviasi untuk hitung *price instability* maka data saya cocok untuk diterapkan metode ward
+
+```{r}
+komo_clean = read_xlsx("D:\\Semester 5\\TPG\\TPG\\Tugas Akhir Mandiri TPG (clean).xlsx")
+View(komo_clean)
+str(komo_clean)
+colSums(is.na(komo_clean))
+```
+
+## 1. Studi kasus 1: Stabilitas Harga Daging Sapi Murni (2023)
+
+### Preprocessing Data
+
+```{r}
+# SD harga daging sapi murni tiap provinsi 
+sd_gejolak_d = sd(komo_clean$Harga[komo_clean$Tahun == 2023 & 
+                                komo_clean$Komoditas == "Daging Sapi Murni"], na.rm = TRUE)
+
+# Indikator ketidakstabilan harga (Standar Deviasi)
+daging = komo_clean %>% 
+  filter(Tahun == 2023,
+         Komoditas == "Daging Sapi Murni") %>%
+  group_by(Provinsi) %>%
+  summarise(
+    sd_gejolak_d = sd(Harga, na.rm = TRUE), # indikator ketidakstabilan
+    .groups = "drop"
+  )
+daging
+
+```
+
+Bersihkan data dengan harga daging yang konstan (*flat*) karena jika harganya tetap, maka SD nya pun akan nol.
+
+```{r}
+# Bersikan data dengan harga yang konstan 
+daging$sd_gejolak_d [is.na(daging$sd_gejolak_d )] = 0 # paksa menjadi 0 (provinsi dengan nilai tersebut dianggap stabil)
+```
+
+### EDA (*Exploratory Data Analysis*)
+
+#### Statistik
+
+```{r}
+# Statistik data daging
+summary(daging)
+```
+
+#### Bar Chart
+
+```{r}
+# Sertakan nilai max dan min dari instability price daging
+max = max(daging$sd_gejolak_d)
+min = min(daging$sd_gejolak_d)
+
+# Hasil
+cat("Max : Rp", format(max, big.mark = ".", decimal.mark = ","), "\n")
+cat("Min : Rp", format(min, big.mark = ".", decimal.mark = ","), "\n")
+cat("Standar Deviasi   : Rp", format(sd_gejolak_d, big.mark = ".", decimal.mark = ","), "\n")
+```
+
+```{r}
+# Bar Chart untuk mengetahui tingkatan lonjakan
+ggplot(daging, aes(x = reorder(Provinsi, sd_gejolak_d), y = sd_gejolak_d)) +
+  geom_bar(stat = "identity", fill = ifelse(daging$sd_gejolak_d > mean(daging$sd_gejolak_d), "darkred", "steelblue")) +
+  coord_flip() +
+  
+  geom_text(data = subset(daging, sd_gejolak_d == max | sd_gejolak_d == min),
+            aes(label = paste0("Rp ", format(round(sd_gejolak_d, 0), big.mark = ".", scientific = FALSE))), 
+            hjust = -0.2,        # Geser teks ke kanan sedikit biar tidak nempel batang
+            color = "black",     # Warna teks
+            fontface = "bold",   # Teks tebal
+            size = 4) +          # Ukuran teks
+  
+  # Menambah ruang kosong di sebelah kanan agar teks tidak terpotong
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
+
+  labs(
+    title = "Price Instability Daging Sapi (2023)",
+    subtitle = "Label angka menunjukkan Provinsi dengan Gejolak Tertinggi (Merah) dan Terendah (Biru)",
+    x = "Provinsi",
+    y = "Tingkat Gejolak (Standar Deviasi Rupiah)"
+  ) +
+  theme_minimal()
+
+```
+
+Terlihat bahwa Maluku menjadi provinsi dengan nilai gejolak harga daging sapi tertinggi dengan nilai Rp 18.404 dan NTB menjadi provinsi dengan gejolak harga daging sapi terendah dengan nilai Rp 3.184.
+
+#### Boxplot
+
+```{r}
+# Boxplot untuk mengetahui outlier 
+ggplot(daging, aes(y = sd_gejolak_d)) +
+
+# Tambahkan outlier.colour = "red" di sini
+geom_boxplot(fill = "orange", alpha = 0.5, outlier.colour = "red", outlier.shape = 19, outlier.size = 3) +
+  
+# Label Teks untuk Outlier
+geom_text(data = subset(daging, sd_gejolak_d > quantile(sd_gejolak_d, 0.75) + 1.5 * IQR(sd_gejolak_d)),
+            aes(label = Provinsi, x = 0), 
+            hjust = -0.5, color = "red", fontface = "bold") +
+  
+  labs(
+    title = "Price Instability Daging Sapi 2023",
+    subtitle = "Titik Merah = Outlier",
+    y = "Tingkat Gejolak (SD Rupiah)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+
+Terlihat bahwa terdapat 2 outlier yaitu Prov. Maluku dan Prov. Kep. Riau.
+
+### Metode Ward
+
+#### Standarisasi Data
+
+Tidak perlu standarisasi data karena variabel yang digunakan hanya 1 saja yaitu kolom "gejolak_id".
+
+```{r}
+# Matriks data 
+matrix_d = as.data.frame(daging)
+rownames(matrix_d) = matrix_d$Provinsi # nama provinsi jadi label baris
+matrix_d = matrix_d[,"sd_gejolak_d", drop = FALSE] # mengambil kolom dengan angka saja 
+
+# Hitung jarak Euclidean) data asli
+euc_d = dist(matrix_d,  method = "euclidean")
+
+# Pohon klaster dengan Metode Ward 
+klaster_d = hclust(euc_d, method = "ward.D2")
+```
+
+#### Visualisasi
+
+```{r}
+plot(klaster_d, 
+     main = "Dendogram Stabilitas Harga Daging 2023",
+     sub = "Metode Ward pada Data Gejolak Harga ",
+     xlab = "Provinsi", 
+     ylab = "Jarak Ketidakstabilan (Rupiah)",
+     hang = -1,  # Label sejajar di bawah
+     cex = 0.7)  # Ukuran font
+rect.hclust(klaster_d, k = 3, border = c("red", "blue", "green")) # bagi jadi 2 klaster
+```
+
+#### Profiling
+
+Mengetahui klaster-klaster tersebut seperti apa tingkat ketidakstabilannya
+
+```{r}
+# Potong klaster sesuai dengan peta pohon
+anggota_klaster_d = cutree(klaster_d, k = 3)
+
+# Gabungkan hasil klaster ke data gejolak 
+hasil_klaster_d = data.frame(
+  Provinsi = rownames(matrix_d),
+  Gejolak_Rupiah = matrix_d$sd_gejolak_d, # Data Asli (SD)
+  Klaster = as.factor(anggota_klaster_d) # Label 1, 2, 3
+)
+
+# Hitung statistik tiap klaster 
+profil_klaster_d = hasil_klaster_d %>%
+  group_by(Klaster) %>%
+  summarise(
+    Jumlah_Provinsi = n(),
+    Rata2_Gejolak = mean(Gejolak_Rupiah),
+    Min_Gejolak = min(Gejolak_Rupiah),
+    Max_Gejolak = max(Gejolak_Rupiah),
+    Anggota = paste(Provinsi, collapse = ", ")
+  ) %>%
+  arrange(desc(Rata2_Gejolak)) %>% # Urutkan dari Rata-rata Tertinggi (Paling Bahaya)
+
+# labeling klaster 
+mutate(
+    Kategori = case_when(
+      row_number() == 1 ~ "ZONA MERAH (Bahaya)",
+      row_number() == 2 ~ "ZONA KUNING (Waspada)",
+      row_number() == 3 ~ "ZONA HIJAU (Aman)"
+    ),
+  Rataan_Gejolak = paste("Rp", format(round(Rata2_Gejolak, 0), big.mark = ".", decimal.mark = ","))
+  ) %>% 
+  select (Klaster, Kategori, Rataan_Gejolak, Anggota)
+
+```
+
+```{r}
+library(gt)
+tabel_ringkas = profil_klaster_d %>%
+  gt() %>%
+  
+  # Judul
+  tab_header(
+    title = md("Profil Klaster Stabilitas Harga Daging Sapi 2023"),
+    subtitle = "Clustering Provinsi Berdasarkan Tingkat Gejolak Harga"
+  ) %>%
+  
+  cols_label(
+    Klaster = "Klaster",
+    Kategori = "Kategori Risiko",
+    Rataan_Gejolak = "Rata-rata Gejolak",  
+    Anggota = "Daftar Provinsi Anggota"
+  ) %>%
+  
+  cols_width(
+    Rataan_Gejolak ~ px(150),
+    Anggota ~ px(400),
+    Kategori ~ px(150)
+  ) %>%
+  
+    tab_options(
+    table.border.top.color = "black",
+    heading.border.bottom.color = "black",
+    column_labels.border.bottom.color = "black"
+  )
+
+# Tampilkan
+tabel_ringkas
+```
+
+Terlihat pada tabel hasil profiling klaster, didapati bahwa terdapat 3 klaster, dengan:
+
+-   **Klaster 3 (BAHAYA):** risiko tinggi untuk terjadi lonjakan harga, karena rataan gejolak yang cukup besar.
+
+    -   Bisa jadi adanya hambatan dalam distribusi/pasok logistik pada wilayah tersebut/problem lain.
+
+-   **Klaster 1 (WASPADA):** risiko sedang untuk terjadi lonjakan harga atau harga, karena rataan gejolak yang masih berada di level sedang.
+
+    -   Wilayah dengan instabilitas harga menengah, sehingga penanganannya perlu pengawasan ekstra.
+
+-   **Klaster 3 (AMAN):** risiko rendah untuk terjadi lonjakan harga, karena rataan gejolak yang berada di level rendah (relatif stabil).
+
+    -   Menunjukkan keberhasilan stabilisasi harga di pusat-pusat ekonomi utama.
+
+Dari hasil analisis klaster pada studi kasus 1 yang telah dilakukan terlihat bahwa wilayah/provinsi yang padat penduduk atau menjadi pusat ekonomi memiliki stabilitas harga yang cukup terkontrol dibandingkan dengan wilayah yang bukan merupakan pusat ekonomi dan relatif tidak padat penduduk.
+
+Hal ini mungkin terjadi karena **masalah distribus**i pada daerah-daerah yang jauh, **struktur pasar oligopoli**, **ketergantungan pasokan** karena bukan sentra produksi, atau **keterhambatan infrastruktur (cold chain).**
+
+### Analisis Diskriminan
+
+```{r}
+# Gabungkan data dengan label 
+validasi_d = hasil_klaster_d %>% 
+  left_join(profil_klaster_d %>% select(Klaster,Kategori), by = "Klaster") %>%
+  select(Gejolak_Rupiah, Kategori)
+```
+
+```{r}
+# LDA 
+model_lda_d = lda(Kategori ~ Gejolak_Rupiah, data = validasi_d)
+model_lda_d
+```
+
+```{r}
+# Cek Akurasi
+prediksi_d = predict(model_lda_d)$class
+conf_matrix_d = table(Aktual = validasi_d$Kategori, Prediksi = prediksi_d)
+print(prediksi_d)
+```
+
+```{r}
+akurasi_d = sum(diag(conf_matrix_d)) / sum(conf_matrix_d) * 100
+cat("Akurasi Klasifikasi Daging :", round(akurasi_d, 2), "%\n\n")
+
+# Visualisasi
+library(ggplot2)
+
+# Pastikan data_validasi_daging sudah ada dari langkah sebelumnya
+# Plot Distribusi Pemisah Zona
+ggplot(validasi_d, aes(x = Gejolak_Rupiah, fill = Kategori)) +
+  # Gambar kurva gunung (Density)
+  geom_density(alpha = 0.7) +
+  
+  # Warna Manual (Biar sesuai konteks: Hijau, Kuning, Merah)
+  scale_fill_manual(values = c(
+    "ZONA HIJAU (Aman)" = "forestgreen",
+    "ZONA KUNING (Waspada)" = "gold",
+    "ZONA MERAH (Bahaya)" = "firebrick"
+  )) +
+  
+  # Hiasan Grafik
+  labs(
+    title = "Bukti Validitas Pengelompokan Zona Daging Sapi",
+    subtitle = "Terlihat kurva Hijau, Kuning, dan Merah terpisah sempurna (Tidak tumpang tindih)",
+    x = "Tingkat Gejolak Harga (SD Rupiah)",
+    y = "Densitas (Kepadatan Data)",
+    fill = "Kategori Zona"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+Akurasi 100% dipengaruhi oleh data yang ***univariate*****.** Ward membagi-bagi data dengan memotong rentang nilai, karena data daging univariate maka ***cut-off-point*** **mudah ditemukan.**
+
+## 2. Studi Kasus 2: Stabilitas Harga Beras (2024)
+
+### Preprocessing Data
+
+```{r}
+# Buat data beras 
+sd_beras_prov = komo_clean %>% 
+  filter(Tahun == 2024,
+         Komoditas %in% c("Beras Premium", "Beras Medium")) %>%
+  group_by(Provinsi, Komoditas) %>% # SD dari harga-harga harian/bulanan untuk setiap Provinsi dan Jenis Beras (Premium/Medium).
+  summarise(
+    sd_gejolak_b = sd(Harga, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = Komoditas, values_from = sd_gejolak_b) # pivot jadi 2 kolom (Bivariat)
+
+head(sd_beras_prov)
+```
+
+```{r}
+sd_beras_nas = komo_clean %>% 
+  filter(Tahun == 2024,
+         Komoditas %in% c("Beras Premium", "Beras Medium")) %>%
+  group_by(Komoditas) %>% # <--- Kuncinya di sini: Cuma group by Komoditas
+  summarise(
+    SD_Nasional = sd(Harga, na.rm = TRUE)
+  )
+
+sd_beras_nas
+```
+
+```{r}
+# Cleaning data 
+sd_beras_prov[is.na(sd_beras_prov)] = 0 
+
+# Data frame
+plot_beras = sd_beras_prov
+
+# Matriks 
+matrix_b = as.data.frame(sd_beras_prov)
+rownames(matrix_b) = matrix_b$Provinsi
+matrix_b = matrix_b[,-1]
+```
+
+### EDA
+
+```{r}
+# Hitung rataan nasional sebagai garis batas
+mean_bp = mean(plot_beras$`Beras Premium`)
+mean_bm = mean(plot_beras$`Beras Medium`)
+
+# Kode Provinsi 
+kode_prov = komo_clean %>% select(Provinsi, KodeProv) %>% distinct()
+plot_beras_prov = plot_beras %>% left_join(kode_prov, by = "Provinsi")
+  
+```
+
+#### Statistik
+
+```{r}
+summary(sd_beras_prov)
+```
+
+```{r}
+summary(sd_beras_nas)
+```
+
+Hasil statistik dari data beras akan lebih baik membutuhkan standarisasi untuk penyamaan skala.
+
+#### Scatter Plot
+
+```{r}
+library(ggrepel)
+
+ggplot(plot_beras_prov, aes(x = `Beras Medium`, y = `Beras Premium`)) +
+  
+  # Titik Provinsi
+  geom_point(color = "darkblue", size = 3, alpha = 0.7) +
+  
+  geom_text_repel(aes(label = KodeProv), 
+                  size = 4,             # Ukuran angka bisa agak besar karena pendek
+                  fontface = "bold",
+                  box.padding = 0.3,    
+                  max.overlaps = Inf) + 
+  
+  # Garis Kuadran
+  geom_vline(xintercept = mean_bm, linetype = "dashed", color = "red", alpha=0.5) +
+  geom_hline(yintercept = mean_bp, linetype = "dashed", color = "red", alpha=0.5) +
+  
+  # Label Penjelas
+  annotate("text", x = max(plot_beras$`Beras Medium`), y = max(plot_beras$`Beras Premium`), 
+           label = "GAWAT (Liar)", color = "red", fontface = "bold", hjust = 1, vjust = 1) +
+  
+  labs(
+    title = "Peta Diagnosa Stabilitas Harga Beras 2024",
+    subtitle = "Label menggunakan Kode BPS (Cth: 11=Aceh, 31=DKI, 91=Papua)",
+    x = "Gejolak Beras Medium (Rupiah)",
+    y = "Gejolak Beras Premium (Rupiah)"
+  ) +
+  theme_minimal()
+```
+
+Diagnosis awal menunjukkan bahwa sebagian besar/cenderung semua provinsi memiliki harga yang relatif cukup stabil baik beras premium ataupun beras medium.
+
+Di wilayah dengan kode 91 (Papua) memiliki harga yang jauh lebih tinggi daripada wilayah lain.
+
+#### Boxplot
+
+```{r}
+# Boxplot standar deviasi harga beras provinsi
+boxplot(matrix_b, 
+        main = "Peta Sebaran Gejolak Harga Beras Provinsi 2024",
+        col = c("orange", "lightblue"),
+        ylab = "Gejolak (SD Rupiah)")
+```
+
+#### Korelasi
+
+```{r}
+# Korelasi 
+cat("korelasi:", cor(matrix_b$`Beras Premium`, matrix_b$`Beras Medium`),"\n\n")
+
+# 5 Provinsi paling rentan ketidakstabilan harga beras 
+top5 = head(sort(rowSums(matrix_b), decreasing = TRUE), 5)
+data.frame(Total_Gejolak = top5)
+```
+
+### Metode Ward
+
+#### Standarisasi
+
+```{r}
+beras_scaled = scale(matrix_b)
+summary(beras_scaled)
+```
+
+#### Visualisasi
+
+```{r}
+# Jarak Euclidean dan dendogram 
+euc_b = dist(beras_scaled, method = "euclidean")
+dendogram_b = hclust(euc_b, metho = "ward.D2")
+
+# Visualisasi 
+plot(dendogram_b, 
+     main = "Dendrogram Stabilitas Harga Beras 2024",
+     sub = "Metode Ward (Premium & Medium)", 
+     xlab = "", ylab = "Jarak Ketidakstabilan",
+     hang = -1, cex = 0.6)
+
+rect.hclust(dendogram_b, k = 3, border = c("red", "blue", "green"))
+```
+
+#### Profiling
+
+```{r}
+klaster_b = cutree(dendogram_b, k = 3)
+
+# Penggabungan data asli dengan hasil klaster 
+gab_b = data.frame(
+  Provinsi = rownames(matrix_b),
+  Premium  = matrix_b$`Beras Premium`,
+  Medium   = matrix_b$`Beras Medium`,
+  Klaster  = as.factor(klaster_b)
+)
+```
+
+```{r}
+# Buat data profil 
+profil_beras = gab_b %>% 
+  mutate(total_gejolak = Premium + Medium) %>% 
+  group_by(Klaster) %>%
+  summarise(
+    jml_prov = n(),
+    sd_mean_bp  = mean(Premium),   
+    sd_mean_bm  = mean(Medium),   
+    mean_tot = mean(total_gejolak),
+    Anggota  = paste(Provinsi, collapse = ", ")
+  ) %>%
+  arrange(desc(mean_tot)) %>%
+  
+  # Label dan Format Rupiah
+  mutate(
+    Kategori = case_when(
+      row_number() == 1 ~ "ZONA MERAH (Bahaya)",
+      row_number() == 2 ~ "ZONA KUNING (Waspada)",
+      row_number() == 3 ~ "ZONA HIJAU (Aman)"
+    ),
+    # Panggil nama variabel yang BENAR (mean_bp dan mean_bm)
+    `Rataan Beras Premium` = paste("Rp", format(round(sd_mean_bp, 0), big.mark = ".", decimal.mark = ",")),
+    `Rataan Beras Medium`  = paste("Rp", format(round(sd_mean_bm, 0), big.mark = ".", decimal.mark = ","))
+  ) %>%
+  
+  # Pilih kolom yang mau ditampilkan
+  select(Klaster, Kategori, `Rataan Beras Premium`, `Rataan Beras Medium`, Anggota)
+
+# Tampilkan
+profil_beras %>%
+  gt() %>%
+  tab_header(title = md("**Rekapitulasi Klaster Beras 2024**")) %>%
+  cols_width(Anggota ~ px(400))
+```
+
+Terlihat pada tabel hasil profiling klaster, didapati bahwa terdapat 3 klaster, dengan:
+
+-   **Klaster 3 (Risiko Tinggi):** masuk ke dalam klaster yang sangat rentan terhadap ketidakstabilan harga baik beras premium maupun medium. bisa dibandingkan dengan zona 2 dan zona 1 ada ketimpangan gejolak harga yang cukup jauh dengan rataan gejolak harga beras premium Rp 9.813 dan beras medium Rp 8.075.
+
+    -   Bisa jadi masalah distribusi, karena sangat bergantung pada pasokan kapal kontainer melihat letak geografis dari Papua Barat.
+
+-   **Klaster 2 (Risiko Sedang):** masuk ke dalam klaster yang cukup rentan dengan rataan gejolak harga beras preimum di Rp 1.181 dan beras medium Rp 1.151. Klaster 2 dihuni oleh provinsi *net consumer/* daerah konsumen.
+
+    -   ketergantungan pada pasok, karena klaster ini juga lebih banyak dihuni oleh daerah konsumen bukan produsen seperti Jakarta walaupun wilayahnya besar, tapi *zero production* (tidak ada lahan sawah).
+
+    -   Wilayah perbatasan seperti Kep. Riau dan Kalimantan Utara akan memiliki biaya ekonomi yang tinggi untuk distribusi.
+
+-   **Klaster 1 (Risiko Rendah):** masuk ke dalam klaster yang cukup stabil dengan rataan gejolak harga beras premium Rp 754 dan beras medium Rp 848. Bisa dikatakan kebijakan impor yang dilakukan pada provinsi yang ada di klaster 1 cukup berhasil.
+
+    -   Banyak dihuni oleh daerah sentra produksi/lumbung padi. Sehingga pasokannya cenderung pendek dan langsung didistribusikan.
+
+Pemetaan stabilitas harga beras premium dan beras medium di Indonesia pasca kebijakan impor 2024, impor dapat dikatakan **cukup berhasil menstabilkan harga** di **daerah pemasok/produsen** beras dan juga **wilayah dengan infrastruktur yang cukup** memadai seperti pada klaster 1. Semetara klaster 2 dihuni oleh wilayah *net consumer* klaster 3 diisi oleh Provinsi Papua Barat sebagai wilayah timur terluar Indonesia. Hal ini menandakan bahwa **selain ketersediaan (*supply*)** yang harus dibenahi, **pemerataan distribusi** dan **rantai pasok serta struktur pasar juga perlu diperhatikan.**
+
+### Analisis Diskriminan
+
+##### Fungsi R
+
+```{r}
+# Gabungkan 'gab_b' dan Label Kategori dari 'profil_beras'
+data_disk_b = gab_b %>%
+  left_join(profil_beras %>% select(Klaster, Kategori), by = "Klaster") %>%
+  dplyr::select(Premium, Medium, Kategori) 
+
+# Cek sekilas datanya
+head(data_disk_b)
+```
+
+```{r}
+# Menghitung model LDA (Linear Discriminant Analysis) Kategori ditentukan oleh (~) Premium + Medium
+model_lda = lda(Kategori ~ Premium + Medium, data = data_disk_b)
+print(model_lda)
+```
+
+Hasil matriks Coefficients of Linear Discriminants
+
+```         
+Coefficients of linear discriminants: 
+
+           LD1          LD2 
+Premium 0.006145240 -0.004487475 
+Medium  0.001601624  0.005625459
+```
+
+**Terlihat bahwa LD1 (Beras premium)** nilai variansnya lebih besar daripada LD2 (Beras Medium), ini menandakan bahwa beras premium cukup **menjadi pembeda antar zona,** penentuan batas pengelompokan klaster.
+
+```{r}
+# Confusion Matrix
+# Minta model menebak ulang kategori berdasarkan data
+prediksi = predict(model_lda)
+kelas_prediksi = prediksi$class
+
+# Bandingkan Tebakan vs Kategori Asli
+tabel_validasi = table(Aktual = data_disk_b$Kategori, Prediksi = kelas_prediksi)
+
+print("Matrix of Confusion")
+print(tabel_validasi)
+
+# Hitung Persentase Akurasi
+akurasi = sum(diag(tabel_validasi)) / sum(tabel_validasi) * 100
+cat("APER: ", round(akurasi, 2), "%\n")
+```
+
+#### Cara rpubs
+
+##### Pisahkan Data Tiap Klaster
+
+```{r}
+# Pisahkan data per kelompok (Zona) untuk perhitungan manual
+Hijau  = subset(data_disk_b, Kategori == "ZONA HIJAU (Aman)")[, 1:2]
+Kuning = subset(data_disk_b, Kategori == "ZONA KUNING (Waspada)")[, 1:2]
+Merah  = subset(data_disk_b, Kategori == "ZONA MERAH (Bahaya)")[, 1:2]
+
+# Cek jumlah data per kelompok
+cat("Jumlah Data Hijau:", nrow(Hijau), "\n")
+cat("Jumlah Data Kuning:", nrow(Kuning), "\n")
+cat("Jumlah Data Merah:", nrow(Merah), "\n")
+```
+
+##### Hitung Vektor Tiap Klaster
+
+```{r}
+# Menghitung mean vektor tiap kelompok
+mean_Hijau  = colMeans(Hijau, na.rm = TRUE)
+mean_Kuning = colMeans(Kuning, na.rm = TRUE)
+mean_Merah  = colMeans(Merah, na.rm = TRUE)
+
+# Tampilkan perbandingan rata-rata
+rbind(Zona_Hijau = mean_Hijau, 
+      Zona_Kuning = mean_Kuning, 
+      Zona_Merah = mean_Merah)
+```
+
+##### Matriks Variance-Covariance
+
+```{r}
+# Matriks Covariance Zona Hijau (Aman)
+cov_Hijau = cov(Hijau)
+print("Covariance Zona Hijau:")
+cov_Hijau
+
+# Matriks Covariance Zona Kuning (Waspada)
+cov_Kuning = cov(Kuning)
+print("Covariance Zona Kuning:")
+cov_Kuning
+```
+
+Cov zona merah tidak dapat dihitung karena hanya memiliki 1 observasi.
+
+```{r}
+# Melakukan Prediksi ulang ke data asli
+hasil_prediksi = predict(model_lda)
+
+# Simpan hasil prediksi ke dalam dataframe
+d_hasil_beras = data_disk_b
+d_hasil_beras$Prediksi_Model = hasil_prediksi$class
+
+# Cek beberapa data hasil prediksi
+head(d_hasil_beras)
+```
+
+##### Matrix of Confusion
+
+```{r}
+# Buat tabel akurasi (Confusion Matrix)
+conf_matrix_beras = table(Aktual = d_hasil_beras$Kategori, Prediksi = d_hasil_beras$Prediksi_Model)
+
+print("CONFUSION MATRIX")
+conf_matrix_beras
+```
+
+Hasil confusion matrix pada pemetaan kestabilan harga beras pasca impor, menunjukkan bahwa ada kesalahan pemetaan/klastering. Ter 1 provinsi yang sebenarnya ada di zona kuning namun hasil prediksi memetakan wilayah tersebut ada di zona hijau.
+
+##### APER (Apparent Error Rate)
+
+Tingkat kesalahan nyata, mengukur seberapa besar kesalahan model diskriminan dalam mengklasifikasikan objek.
+
+$$
+APER = \frac{n_{1M} + n_{2M}}{n_1 + n_2}
+$$
+
+$n_1M$: (jumlah objek kelompok 1 yang salah masuk ke kelompok 2)
+
+$n_2M$: (jumlah objek kelompok 2 yang salah masuk ke kelompok 1)
+
+$n_1$: Total jumlah observasi di Kelompok 1.
+
+$n_2$: Total jumlah observasi di Kelompok 2.
+
+```{r}
+# 1. Hitung Total Akurasi (Diagonal / Total Data)
+akurasi_total = sum(diag(conf_matrix_beras)) / sum(conf_matrix_beras)
+cat("Tingkat Akurasi Model :", round(akurasi_total * 100, 2), "%\n")
+
+# 2. Hitung APER (Tingkat Kesalahan)
+APER = 1 - akurasi_total
+cat("Tingkat Kesalahan (APER):", round(APER * 100, 2), "%\n")
+```
+
+Hanya kelemahan dari APER ini adalah terlalu optimis (*overfitting).* Karena dia menggunakan data yang sama untuk membangun model sekaligus untuk mengetes modelnya. Maka nilainya cenderung bagus tapi belum tentu bisa diterapkan di kasus yang baru.
+
+```{r}
+# Gabungkan Nama Provinsi, Status Asli, dan Prediksi Komputer
+cek_miss = data.frame(
+  Provinsi = gab_b$Provinsi,          # Ambil nama provinsi
+  Aktual   = data_disk_b$Kategori,    # Status asli dari Ward
+  Prediksi = kelas_prediksi           # Tebakan dari Diskriminan
+)
+
+# Cari Provinsi yang Salah Kamar
+# (Aktual = Kuning, tapi Prediksi = Hijau)
+miss = cek_miss %>%
+  filter(Aktual == "ZONA KUNING (Waspada)" & Prediksi == "ZONA HIJAU (Aman)")
+
+miss
+```
+
+##### Lachenbruch
+
+Metode ini lebih sering digunakan karena memberikan estimasi tingkat kesalahan yang hampir tidak bias terhadap data.
+
+$$
+\hat{E}(AER) = \frac{n_{1M}^{(H)} + n_{2M}^{(H)}}{n_1 + n_2}
+$$
+
+$n_{1M}^{(H)}$ : Jumlah observasi dari **Kelompok 1** yang salah diklasifikasikan (misclassified) saat menggunakan prosedur *Holdout* (disembunyikan).
+
+$n_{2M}^{(H)}$: Jumlah observasi dari **Kelompok 2** yang salah diklasifikasikan saat menggunakan prosedur *Holdout.*
+
+$n_1$: Total jumlah observasi di Kelompok 1.
+
+$n_2$: Total jumlah observasi di Kelompok 2.
+
+$\hat{E}(AER)$: Estimasi dari *Actual Error Rate* (Tingkat Kesalahan Aktual).
+
+```{r}
+# cross validation
+lda_lach = lda(Kategori ~ Premium + Medium, data = data_disk_b, CV = TRUE)
+
+# Confusion of Matrix
+tabel_lach = table(Aktual = data_disk_b$Kategori, Prediksi = lda_lach$class) # lda_lach$class berisi hasil tebakan saat data tersebut "disembunyikan"
+
+tabel_lach
+```
+
+Akurasi zona merah menjadi 0 karena zona ini hanya memiliki 1 objek. Maka pada saat objek tersebut dijadikan sebgai data uji (*holdout*), data latih akan kehilangan informasi terkait zona merah sehingga model tidak mengenali atau tidak bisa memprediksi zona tersebut dengan tepat. Ini merupakan keterbatasan cross-valodation dengan jumlah anggota yang cenderung sedikit.
+
+```{r}
+# Akurasi Error Rate 
+akurasi_jackknife = sum(diag(tabel_lach)) / sum(tabel_lach)
+error_lachenbruch = 1 - akurasi_jackknife
+
+cat("\nHASIL VALIDASI\n")
+cat("Akurasi Lachenbruch :", round(akurasi_jackknife * 100, 2), "%\n")
+cat("Error Rate :", round(error_lachenbruch * 100, 2), "%\n")
+```
+
+Hasil evaluasi menggunakan Lachenburch diperoleh **akurasi sebesar 96.97%** dalam klastering objke dengan **error rate (peluang kesalahan) sebesar 3.03%.** Dengan tingkat akurasi yang cukup tinggi ini menunjukkan bahwa hasil klastering memiliki struktur yang kuat dan dapat dipercaya.
